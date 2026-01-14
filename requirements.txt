@@ -1,3 +1,5 @@
 google-generativeai
 upstash-redis
 flask
+requests
+python-dotenv
