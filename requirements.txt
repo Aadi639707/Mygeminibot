@@ -3,3 +3,4 @@ upstash-redis
 flask
 requests
 python-dotenv
+gunicorn
