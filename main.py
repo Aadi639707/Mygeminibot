@@ -5,7 +5,7 @@ from flask import Flask, request
 from upstash_redis import Redis
 from groq import Groq
 
-# 1. API Keys
+# 1. Keys
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
@@ -30,25 +30,29 @@ def telegram_webhook():
         return 'OK', 200
     return 'Forbidden', 403
 
-# 4. Bot Logic - Image Generation (Sahi Keywords ke sath)
-@bot.message_handler(func=lambda message: any(word in message.text.lower() for word in ["image", "photo", "banao", "create", "make"]))
+# 4. Image Logic (Keywords badha diye hain)
+@bot.message_handler(func=lambda message: any(word in message.text.lower() for word in ["image", "photo", "banao", "create", "draw", "pic"]))
 def generate_image(message):
     user_text = message.text.lower()
-    # Prompt nikalne ka tareeka
-    prompt = user_text.replace("generate", "").replace("image", "").replace("banao", "").replace("create", "").replace("ki", "").strip()
+    # Faltu words hatakar saaf prompt nikalna
+    for word in ["generate", "image", "banao", "create", "draw", "photo", "ki", "ek", "kro"]:
+        user_text = user_text.replace(word, "")
     
-    if not prompt or len(prompt) < 3:
-        bot.reply_to(message, "Kripya batayein ki kis cheez ki image banani hai? (Example: 'Ek sher ki image banao')")
+    prompt = user_text.strip()
+    
+    if not prompt:
+        bot.reply_to(message, "Kripya batayein ki kis cheez ki image banani hai?")
         return
 
-    bot.reply_to(message, "Theek hai, main aapke liye image bana raha hoon... thoda intezar karein! 🎨")
+    bot.reply_to(message, "Theek hai, main aapke liye image bana raha hoon... 🎨")
     try:
-        image_url = f"https://image.pollinations.ai/prompt/{prompt}"
+        # Pollinations AI URL (Added random seed for better results)
+        image_url = f"https://image.pollinations.ai/prompt/{prompt}?width=1024&height=1024&nologo=true"
         bot.send_photo(message.chat.id, image_url, caption=f"Ye rahi aapki image: {prompt}")
     except Exception as e:
-        bot.reply_to(message, "Maaf kijiyega, image generation mein error aaya.")
+        bot.reply_to(message, "Technical error ki wajah se image nahi ban payi. Firse try karein.")
 
-# 5. Chat Logic - Sahi Hindi ke liye
+# 5. Chat Logic (System instruction fix kiya)
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):
     user_id = str(message.from_user.id)
@@ -60,7 +64,7 @@ def chat_with_ai(message):
             messages=[
                 {
                     "role": "system", 
-                    "content": "Your name is Chat Gpt Plus Bot. Always reply in clear and natural Hinglish (Hindi + English). Don't use broken sentences. If a user asks to create an image, tell them to use keywords like 'image' or 'banao'."
+                    "content": "Your name is Chat Gpt Plus Bot. You ARE capable of generating images. If a user asks for an image, tell them 'Ok, main bana raha hoon'. Always reply in clear Hinglish. PDF making is not supported yet."
                 },
                 {"role": "user", "content": f"History: {history}\nUser: {user_input}"}
             ],
@@ -69,12 +73,11 @@ def chat_with_ai(message):
         reply_text = chat_completion.choices[0].message.content
 
         # Update History
-        new_history = f"{history}\nUser: {user_input}\nAI: {reply_text}"
-        redis.set(f"chat_{user_id}", new_history[-1000:], ex=3600)
+        redis.set(f"chat_{user_id}", f"{history}\nUser: {user_input}\nAI: {reply_text}"[-1000:], ex=3600)
 
         bot.reply_to(message, reply_text)
     except Exception as e:
-        bot.reply_to(message, "System error! Please try again later.")
+        bot.reply_to(message, "Maaf kijiyega, system busy hai.")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
