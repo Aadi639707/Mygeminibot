@@ -18,7 +18,7 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 @app.route('/')
 def home(): 
-    return "Chat Gpt Plus Bot is Running!"
+    return "Chat Gpt Plus Bot is Running with Strong Memory!"
 
 @app.route('/telegram', methods=['POST'])
 def telegram_webhook():
@@ -29,35 +29,33 @@ def telegram_webhook():
         return 'OK', 200
     return 'Forbidden', 403
 
-# 2. START COMMAND - User ID save karne ke liye
+# 2. START COMMAND - User registration
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = str(message.from_user.id)
-    # User ko database mein register karna
     redis.sadd("bot_users", user_id)
-    bot.reply_to(message, "Namaste! Main **Chat Gpt Plus Bot** hoon. Main aapke messages aur images banane ke liye taiyar hoon!")
+    bot.reply_to(message, "Namaste! Main **Chat Gpt Plus Bot** hoon. Meri memory ab pehle se zyada strong hai, main aapki purani baatein nahi bhoolunga!")
 
-# 3. BROADCAST COMMAND - Sirf aapke liye
+# 3. BROADCAST COMMAND - Fix for Bytes/String
 @bot.message_handler(commands=['broadcast'])
 def broadcast_msg(message):
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "❌ Maaf kijiyega, ye command sirf Admin ke liye hai.")
+        bot.reply_to(message, "❌ Admin access denied.")
         return
     
     text = message.text.replace("/broadcast", "").strip()
     if not text:
-        bot.reply_to(message, "Usage: `/broadcast Hello dosto`")
+        bot.reply_to(message, "Sahi tarika: `/broadcast Hello Everyone`")
         return
     
     users = redis.smembers("bot_users")
     if not users:
-        bot.reply_to(message, "Database khali hai! Pehle users ko `/start` karne kahein.")
+        bot.reply_to(message, "Database khali hai!")
         return
 
     count = 0
     for user in users:
         try:
-            # Bytes handling fix
             u_id = user.decode('utf-8') if isinstance(user, bytes) else str(user)
             bot.send_message(u_id, text)
             count += 1
@@ -75,46 +73,48 @@ def generate_image(message):
     
     prompt = user_text.strip()
     if not prompt:
-        bot.reply_to(message, "Kripya batayein ki kya banana hai?")
+        bot.reply_to(message, "Kya banana hai? Prompt dein.")
         return
 
-    bot.reply_to(message, "Theek hai, main aapke liye image bana raha hoon... 🎨")
+    bot.reply_to(message, "Theek hai, main image bana raha hoon... thoda wait karein! 🎨")
     try:
         image_url = f"https://image.pollinations.ai/prompt/{prompt}?width=1024&height=1024&nologo=true"
         bot.send_photo(message.chat.id, image_url, caption=f"Ye rahi aapki image: {prompt}")
     except:
-        bot.reply_to(message, "Technical error: Image nahi ban saki.")
+        bot.reply_to(message, "Error: Image generation fail ho gaya.")
 
-# 5. CHAT AI LOGIC (Groq)
+# 5. STRONG MEMORY CHAT LOGIC
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):
     user_id = str(message.from_user.id)
     try:
-        history = redis.get(f"chat_{user_id}") or ""
-        # Bytes decoding for history
-        if isinstance(history, bytes): history = history.decode('utf-8')
-        
+        # Purani memory fetch karna (Memory Retention Fix)
+        history = redis.get(f"chat_{user_id}")
+        if history and isinstance(history, bytes):
+            history = history.decode('utf-8')
+        else:
+            history = ""
+
         chat_completion = groq_client.chat.completions.create(
             messages=[
                 {
                     "role": "system", 
-                    "content": "Your name is Chat Gpt Plus Bot. Always reply in natural Hinglish. You can generate images if asked."
+                    "content": "Your name is Chat Gpt Plus Bot. You have an excellent memory. If the user mentions something from earlier in the chat history, acknowledge it. Always reply in natural Hinglish."
                 },
-                {"role": "user", "content": f"History: {history}\nUser: {message.text}"}
+                {"role": "user", "content": f"Previous Conversations for Context:\n{history}\n\nNew Message: {message.text}"}
             ],
             model="llama-3.3-70b-versatile",
         )
         reply = chat_completion.choices[0].message.content
         
-        # Memory update
+        # History update: 4000 characters (Large memory) aur 24 hours (86400 seconds) expiry
         new_history = f"{history}\nUser: {message.text}\nAI: {reply}"
-        redis.set(f"chat_{user_id}", new_history[-1000:], ex=3600)
+        redis.set(f"chat_{user_id}", new_history[-4000:], ex=86400)
         
         bot.reply_to(message, reply)
     except Exception as e:
-        print(f"Error: {e}")
-        bot.reply_to(message, "Maaf kijiyega, main abhi busy hoon.")
+        print(f"Chat Error: {e}")
+        bot.reply_to(message, "Maaf kijiyega, system thoda busy hai.")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-    
