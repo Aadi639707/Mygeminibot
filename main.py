@@ -1,71 +1,58 @@
+import os
+from flask import Flask, request
 import google.generativeai as genai
 from upstash_redis import Redis
+import requests
 
-# --- CONFIGURATION ---
-# Replace with your actual keys
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
-REDIS_URL = "YOUR_UPSTASH_REDIS_URL"
-REDIS_TOKEN = "YOUR_UPSTASH_REDIS_TOKEN"
+app = Flask(__name__)
 
-# Initialize Gemini
-genai.configure(api_key=GEMINI_API_KEY)
+# Config from Environment Variables
+GEMINI_KEY = os.getenv("GEMINI_KEY")
+REDIS_URL = os.getenv("REDIS_URL")
+REDIS_TOKEN = os.getenv("REDIS_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+genai.configure(api_key=GEMINI_KEY)
+redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# Initialize Redis Memory
-redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
-def get_ai_response(user_id, user_input):
-    """
-    Handles the chat logic, memory, and language adaptation.
-    """
-    
-    # 1. Handle Reset Command
-    if user_input.strip().lower() == "/reset":
-        redis.delete(user_id)
-        return "System: Memory cleared. We can start a new topic now!"
+@app.route('/telegram', methods=['POST'])
+def webhook():
+    data = request.json
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        user_msg = data["message"].get("text", "")
 
-    # 2. Retrieve Chat History from Redis
-    # We store history as a string. If no history, it's an empty string.
-    chat_history = redis.get(user_id) or ""
+        if user_msg.lower() == "/reset":
+            redis.delete(chat_id)
+            send_message(chat_id, "Memory reset! What's next?")
+            return "ok"
 
-    # 3. System Instructions for the AI
-    # This ensures it copies my persona and stays on topic.
-    system_instruction = (
-        "You are an advanced AI assistant, a copy of Gemini. "
-        "Rules:\n"
-        "1. Stick to the current topic strictly until the user says '/reset'.\n"
-        "2. Respond in the EXACT same language the user uses (English, Hindi, Hinglish, etc.).\n"
-        "3. Be helpful, insightful, and empathetic.\n"
-        "4. If the user asks for an image, describe it vividly (Note: Image API can be added later).\n"
-    )
+        # Image Logic
+        if "image" in user_msg.lower() or "photo" in user_msg.lower():
+            img_url = f"https://image.pollinations.ai/prompt/{user_msg.replace(' ', '%20')}"
+            send_message(chat_id, f"Here is your image: {img_url}")
+            return "ok"
 
-    # 4. Create the full prompt with context
-    full_prompt = f"{system_instruction}\n\nChat History:\n{chat_history}\n\nUser: {user_input}\nAI:"
-
-    try:
-        # 5. Generate Response
+        # AI Chat Memory
+        history = redis.get(chat_id) or ""
+        system_instruction = "You are Gemini. Stay on topic until /reset. Use user's language."
+        full_prompt = f"{system_instruction}\nHistory: {history}\nUser: {user_msg}\nAI:"
+        
         response = model.generate_content(full_prompt)
-        bot_output = response.text
+        bot_reply = response.text
+        
+        redis.set(chat_id, f"{history}\nUser: {user_msg}\nAI: {bot_reply}", ex=86400)
+        send_message(chat_id, bot_reply)
+    return "ok"
 
-        # 6. Update History in Redis (Saves the conversation)
-        updated_history = f"{chat_history}\nUser: {user_input}\nAI: {bot_output}"
-        # Setting an expiry (optional) - e.g., memory lasts for 24 hours (86400 seconds)
-        redis.set(user_id, updated_history, ex=86400)
+@app.route('/')
+def health(): return "Bot is Alive!"
 
-        return bot_output
-
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-# --- TESTING THE BOT ---
 if __name__ == "__main__":
-    print("Bot is running! (Type '/reset' to clear memory or 'exit' to stop)")
-    user_name = "User_123" # This acts as a unique ID for the user
-    
-    while True:
-        user_msg = input("\nYou: ")
-        if user_msg.lower() == "exit":
-            break
+    app.run(host='0.0.0.0', port=10000)
             
-        response = get_ai_response(user_name, user_msg)
-        print(f"\nBot: {response}")
