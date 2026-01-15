@@ -1,5 +1,4 @@
-google-generativeai
-upstash-redis
 flask
-requests
-gunicorn
+pyTelegramBotAPI
+groq
+upstash-redis
