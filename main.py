@@ -1,65 +1,67 @@
 import os
-from flask import Flask, request
+import telebot
 import google.generativeai as genai
+from flask import Flask, request
 from upstash_redis import Redis
-import requests
 
-app = Flask(__name__)
-
-# Config from Render Environment Variables
+# 1. API Keys and Tokens (Environment Variables se aayenge)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
 REDIS_TOKEN = os.getenv("REDIS_TOKEN")
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Setup Gemini & Redis
+# 2. Setup
+bot = telebot.TeleBot(TOKEN)
 genai.configure(api_key=GEMINI_KEY)
 redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
+app = Flask(__name__)
+
+# Gemini Model Settings
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text})
-
-@app.route('/telegram', methods=['POST'])
-def webhook():
-    data = request.json
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        user_msg = data["message"].get("text", "")
-
-        # 1. Reset Logic
-        if user_msg.lower() == "/reset":
-            redis.delete(chat_id)
-            send_message(chat_id, "Memory reset! What's our next topic?")
-            return "ok"
-
-        # 2. Image Logic
-        if "image" in user_msg.lower() or "photo" in user_msg.lower():
-            img_url = f"https://image.pollinations.ai/prompt/{user_msg.replace(' ', '%20')}"
-            send_message(chat_id, f"Here is your image: {img_url}")
-            return "ok"
-
-        # 3. Chat with Memory
-        history = redis.get(chat_id) or ""
-        # System instructions make it behave like Gemini
-        system_instruction = "You are Gemini. Stick to the current topic strictly. Reply in the user's language."
-        full_prompt = f"{system_instruction}\nHistory: {history}\nUser: {user_msg}\nAI:"
-        
-        try:
-            response = model.generate_content(full_prompt)
-            bot_reply = response.text
-            # Update Memory
-            redis.set(chat_id, f"{history}\nUser: {user_msg}\nAI: {bot_reply}", ex=86400)
-            send_message(chat_id, bot_reply)
-        except Exception as e:
-            send_message(chat_id, "System error, please check API keys.")
-            
-    return "ok"
-
 @app.route('/')
-def health(): return "Bot is Running"
+def home():
+    return "Bot is Running!"
+
+# 3. Webhook Route (Yahi rasta hai jo Telegram use karega)
+@app.route('/telegram', methods=['POST'])
+def telegram_webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    return 'Forbidden', 403
+
+# 4. Bot Logic
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(message, "Namaste! Main Gemini AI bot hoon. Aap mujhse kuch bhi pooch sakte hain.")
+
+@bot.message_handler(func=lambda message: True)
+def chat_with_gemini(message):
+    user_id = str(message.from_user.id)
+    user_input = message.text
+
+    try:
+        # Chat History from Redis (Optional: basic memory)
+        history = redis.get(f"chat_{user_id}") or ""
+        full_prompt = f"{history}\nUser: {user_input}\nAI:"
+
+        # Generate Response from Gemini
+        response = model.generate_content(full_prompt)
+        reply_text = response.text
+
+        # Update History
+        new_history = f"{full_prompt} {reply_text}"[-1000:] # Last 1000 chars save karega
+        redis.set(f"chat_{user_id}", new_history, ex=3600) # 1 hour memory
+
+        bot.reply_to(message, reply_text)
+
+    except Exception as e:
+        print(f"Error: {e}")
+        bot.reply_to(message, "Maaf kijiyega, abhi mere system mein thodi dikkat aa rahi hai.")
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host="0.0.0.0", port=10000)
     
