@@ -30,25 +30,25 @@ def telegram_webhook():
         return 'OK', 200
     return 'Forbidden', 403
 
-# 4. Bot Logic
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    # Yahan humne naam badal diya hai
-    bot.reply_to(message, "Namaste! Main **Chat Gpt Plus Bot** hoon. Aap mujhse kuch bhi pooch sakte hain aur images bhi bana sakte hain!")
-
-@bot.message_handler(func=lambda message: message.text and message.text.lower().startswith("generate image of"))
+# 4. Bot Logic - Image Generation (Sahi Keywords ke sath)
+@bot.message_handler(func=lambda message: any(word in message.text.lower() for word in ["image", "photo", "banao", "create", "make"]))
 def generate_image(message):
-    prompt = message.text[len("generate image of"):].strip()
-    if not prompt:
-        bot.reply_to(message, "Please provide a description. Example: 'generate image of a lion'")
+    user_text = message.text.lower()
+    # Prompt nikalne ka tareeka
+    prompt = user_text.replace("generate", "").replace("image", "").replace("banao", "").replace("create", "").replace("ki", "").strip()
+    
+    if not prompt or len(prompt) < 3:
+        bot.reply_to(message, "Kripya batayein ki kis cheez ki image banani hai? (Example: 'Ek sher ki image banao')")
         return
-    bot.reply_to(message, "Generating your image... please wait!")
+
+    bot.reply_to(message, "Theek hai, main aapke liye image bana raha hoon... thoda intezar karein! 🎨")
     try:
         image_url = f"https://image.pollinations.ai/prompt/{prompt}"
-        bot.send_photo(message.chat.id, image_url, caption=f"Here is your image: {prompt}")
+        bot.send_photo(message.chat.id, image_url, caption=f"Ye rahi aapki image: {prompt}")
     except Exception as e:
-        bot.reply_to(message, "Image nahi ban saki, firse try karein.")
+        bot.reply_to(message, "Maaf kijiyega, image generation mein error aaya.")
 
+# 5. Chat Logic - Sahi Hindi ke liye
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):
     user_id = str(message.from_user.id)
@@ -56,24 +56,25 @@ def chat_with_ai(message):
     try:
         history = redis.get(f"chat_{user_id}") or ""
         
-        # Groq model call with stable model name
         chat_completion = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "Your name is Chat Gpt Plus Bot. You are a helpful assistant."},
+                {
+                    "role": "system", 
+                    "content": "Your name is Chat Gpt Plus Bot. Always reply in clear and natural Hinglish (Hindi + English). Don't use broken sentences. If a user asks to create an image, tell them to use keywords like 'image' or 'banao'."
+                },
                 {"role": "user", "content": f"History: {history}\nUser: {user_input}"}
             ],
-            model="llama-3.3-70b-versatile", # Sabse stable model
+            model="llama-3.3-70b-versatile",
         )
         reply_text = chat_completion.choices[0].message.content
 
         # Update History
         new_history = f"{history}\nUser: {user_input}\nAI: {reply_text}"
-        redis.set(f"chat_{user_id}", new_history[-1500:], ex=3600)
+        redis.set(f"chat_{user_id}", new_history[-1000:], ex=3600)
 
         bot.reply_to(message, reply_text)
     except Exception as e:
-        print(f"Error: {e}")
-        bot.reply_to(message, "Maaf kijiyega, mere system mein abhi dikkat hai. Apni API Key check karein.")
+        bot.reply_to(message, "System error! Please try again later.")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
