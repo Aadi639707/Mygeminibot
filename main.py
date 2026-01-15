@@ -4,12 +4,12 @@ from flask import Flask, request
 from upstash_redis import Redis
 from groq import Groq
 
-# 1. Setup - Variables Render se aayenge
+# 1. Setup - Variables Render se fetch honge
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
 REDIS_TOKEN = os.getenv("REDIS_TOKEN")
-ADMIN_ID = 7757213781  # <--- Aapki ID yahan add kar di hai
+ADMIN_ID = 7757213781  # Aapki Admin ID
 
 bot = telebot.TeleBot(TOKEN)
 redis = Redis(url=REDIS_URL, token=REDIS_TOKEN)
@@ -29,39 +29,44 @@ def telegram_webhook():
         return 'OK', 200
     return 'Forbidden', 403
 
-# 2. START & BROADCAST LOGIC
+# 2. START COMMAND - User ID save karne ke liye
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = str(message.from_user.id)
-    # Naye user ko database mein save karna
+    # User ko database mein register karna
     redis.sadd("bot_users", user_id)
     bot.reply_to(message, "Namaste! Main **Chat Gpt Plus Bot** hoon. Main aapke messages aur images banane ke liye taiyar hoon!")
 
+# 3. BROADCAST COMMAND - Sirf aapke liye
 @bot.message_handler(commands=['broadcast'])
 def broadcast_msg(message):
-    # Sirf aap (Admin) hi ise chala payenge
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ Maaf kijiyega, ye command sirf Admin ke liye hai.")
         return
     
     text = message.text.replace("/broadcast", "").strip()
     if not text:
-        bot.reply_to(message, "Sahi tarika: `/broadcast Hello dosto`")
+        bot.reply_to(message, "Usage: `/broadcast Hello dosto`")
         return
     
     users = redis.smembers("bot_users")
+    if not users:
+        bot.reply_to(message, "Database khali hai! Pehle users ko `/start` karne kahein.")
+        return
+
     count = 0
     for user in users:
         try:
-            # Redis se data bytes mein hota hai, isliye decode kar rahe hain
-            u_id = user.decode('utf-8') if isinstance(user, bytes) else user
+            # Bytes handling fix
+            u_id = user.decode('utf-8') if isinstance(user, bytes) else str(user)
             bot.send_message(u_id, text)
             count += 1
         except:
             continue
+            
     bot.reply_to(message, f"✅ Message {count} users ko bhej diya gaya hai!")
 
-# 3. IMAGE GENERATION LOGIC
+# 4. IMAGE GENERATION LOGIC
 @bot.message_handler(func=lambda message: any(word in message.text.lower() for word in ["image", "photo", "banao", "draw", "pic"]))
 def generate_image(message):
     user_text = message.text.lower()
@@ -80,18 +85,20 @@ def generate_image(message):
     except:
         bot.reply_to(message, "Technical error: Image nahi ban saki.")
 
-# 4. CHAT AI LOGIC (Groq)
+# 5. CHAT AI LOGIC (Groq)
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):
     user_id = str(message.from_user.id)
     try:
         history = redis.get(f"chat_{user_id}") or ""
+        # Bytes decoding for history
+        if isinstance(history, bytes): history = history.decode('utf-8')
         
         chat_completion = groq_client.chat.completions.create(
             messages=[
                 {
                     "role": "system", 
-                    "content": "Your name is Chat Gpt Plus Bot. You are a helpful assistant. Always reply in clear Hinglish. You can generate images if asked."
+                    "content": "Your name is Chat Gpt Plus Bot. Always reply in natural Hinglish. You can generate images if asked."
                 },
                 {"role": "user", "content": f"History: {history}\nUser: {message.text}"}
             ],
@@ -99,12 +106,14 @@ def chat_with_ai(message):
         )
         reply = chat_completion.choices[0].message.content
         
-        # Memory save karna (last 1000 characters)
-        redis.set(f"chat_{user_id}", f"{history}\nUser: {message.text}\nAI: {reply}"[-1000:], ex=3600)
+        # Memory update
+        new_history = f"{history}\nUser: {message.text}\nAI: {reply}"
+        redis.set(f"chat_{user_id}", new_history[-1000:], ex=3600)
         
         bot.reply_to(message, reply)
-    except:
-        bot.reply_to(message, "Maaf kijiyega, main abhi busy hoon. Thodi der baad try karein.")
+    except Exception as e:
+        print(f"Error: {e}")
+        bot.reply_to(message, "Maaf kijiyega, main abhi busy hoon.")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
